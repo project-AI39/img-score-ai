@@ -9,5 +9,23 @@ __pycache__/
 *.pt
 *.pth
 
+# Image files
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.webp
+*.tiff
+*.tif
+*.ico
+*.svg
+*.JPG
+*.JPEG
+*.PNG
+*.GIF
+*.BMP
+*.WEBP
+
 # Test images
 test.png
