@@ -913,7 +913,7 @@ def clear_checkpoint(checkpoint_path: Path) -> None:
 # ===== キャッシュ管理 =====
 def clear_cache(cache_dir: Path) -> None:
     """
-    埋め込みキャッシュファイルを削除する
+    キャッシュディレクトリを丸ごと削除する
 
     学習が正常に完了した後に呼び出す。
     次回の学習で古いキャッシュが使われないようにする。
@@ -923,17 +923,19 @@ def clear_cache(cache_dir: Path) -> None:
     - ディスク容量を節約する
     - 次回の学習で確実に最新の埋め込みを使う
 
+    【削除されるファイル】
+    - embeddings.pt: 埋め込みキャッシュ
+    - embeddings.tmp: 一時ファイル
+    - seed.json: 乱数シード（次回は新しいシードで分割）
+
     Args:
         cache_dir (Path): キャッシュディレクトリのパス
     """
-    cache_file = cache_dir / "embeddings.pt"
-    if cache_file.exists():
-        cache_file.unlink()
-        print(f"Cache cleared: {cache_file}")
-    # 一時ファイルも削除
-    temp_file = cache_dir / "embeddings.tmp"
-    if temp_file.exists():
-        temp_file.unlink()
+    import shutil
+
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir)
+        print(f"Cache directory cleared: {cache_dir}")
 
 
 # ===== 学習 =====

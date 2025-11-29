@@ -29,3 +29,12 @@ __pycache__/
 
 # Test images
 test.png
+
+# Training outputs
+models/trained/
+data/cache/
+data/scores/
+data/classified/
+
+# Training history
+history.json
