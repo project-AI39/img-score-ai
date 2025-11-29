@@ -32,8 +32,6 @@ from PIL import Image
 import open_clip
 from tqdm import tqdm
 import json
-import hashlib
-import shutil
 import random
 import numpy as np
 from typing import Optional, Any
@@ -322,26 +320,93 @@ class ImageEmbeddingDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
 
 
 # ===== 埋め込み計算 =====
-def get_cache_path(image_path: Path, cache_dir: Path) -> Path:
+def get_cache_key(image_path: Path) -> str:
     """
-    画像パスからキャッシュファイルのパスを生成する
+    画像パスからキャッシュキーを生成する
 
     【キャッシュの仕組み】
-    - 画像の絶対パスからハッシュ値を計算
-    - そのハッシュ値をファイル名として使用
-    - これにより、同じ画像は常に同じキャッシュファイルに保存される
+    - 画像の絶対パスをそのままキーとして使用
+    - これにより、同じ画像は常に同じキーでアクセスされる
 
     Args:
         image_path (Path): 画像ファイルのパス
-        cache_dir (Path): キャッシュディレクトリのパス
 
     Returns:
-        Path: キャッシュファイルのパス（.pt ファイル）
+        str: キャッシュキー（画像の絶対パス文字列）
     """
-    # 画像の絶対パスを文字列化してハッシュを計算
-    # MD5 は高速で衝突も少ないため、キャッシュキーに適している
-    path_hash = hashlib.md5(str(image_path.absolute()).encode()).hexdigest()
-    return cache_dir / f"{path_hash}.pt"
+    # 画像の絶対パスを文字列化してキャッシュキーとして使用
+    return str(image_path.absolute())
+
+
+# ===== キャッシュ管理クラス =====
+class EmbeddingCache:
+    """
+    埋め込みキャッシュを1つのファイルで管理するクラス
+
+    【設計思想】
+    - 1つの .pt ファイルに辞書形式で全埋め込みを保存
+    - バッチ処理ごとにファイルを更新（ストリーミング保存）
+    - 途中で止まっても再開可能
+    - 画像パス（絶対パス文字列）をキーとして使用
+
+    【ファイル構造】
+    {
+        "D:/path/to/image1.jpg": tensor([...]),  # 512次元
+        "D:/path/to/image2.png": tensor([...]),
+        ...
+    }
+    """
+
+    def __init__(self, cache_path: Path):
+        """
+        キャッシュの初期化
+
+        Args:
+            cache_path (Path): キャッシュファイルのパス（.pt ファイル）
+        """
+        self.cache_path = cache_path
+        self.cache: dict[str, torch.Tensor] = {}
+        self._load()
+
+    def _load(self) -> None:
+        """キャッシュファイルを読み込む"""
+        if self.cache_path.exists():
+            try:
+                self.cache = torch.load(self.cache_path, weights_only=False)
+                print(f"Loaded cache with {len(self.cache)} embeddings")
+            except Exception as e:
+                print(f"Cache corrupted, starting fresh: {e}")
+                self.cache = {}
+        else:
+            self.cache = {}
+
+    def save(self) -> None:
+        """キャッシュをファイルに保存（アトミック）"""
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = self.cache_path.with_suffix(".tmp")
+        try:
+            torch.save(self.cache, temp_path)
+            temp_path.replace(self.cache_path)
+        except Exception as e:
+            print(f"Error saving cache: {e}")
+            if temp_path.exists():
+                temp_path.unlink()
+
+    def get(self, key: str) -> torch.Tensor | None:
+        """キーに対応する埋め込みを取得"""
+        return self.cache.get(key)
+
+    def set(self, key: str, embedding: torch.Tensor) -> None:
+        """埋め込みをキャッシュに追加（メモリ上のみ）"""
+        self.cache[key] = embedding
+
+    def __contains__(self, key: str) -> bool:
+        """キーがキャッシュに存在するか確認"""
+        return key in self.cache
+
+    def __len__(self) -> int:
+        """キャッシュ内のエントリ数"""
+        return len(self.cache)
 
 
 def compute_single_embedding(
@@ -385,24 +450,28 @@ def compute_embeddings_streaming(
     device: str,
     cache_dir: Path,
     batch_size: int = 32,
+    save_interval: int = 5,
 ) -> torch.Tensor:
     """
     画像リストから CLIP 埋め込みをストリーミング方式で計算する関数
 
     【ストリーミング方式の利点】
-    1. 途中で止まっても再開可能: 計算済みの埋め込みはキャッシュに保存される
-    2. メモリ効率: 一度に全データをメモリに保持しない
+    1. 途中で止まっても再開可能: 計算済みの埋め込みは1つのキャッシュファイルに保存
+    2. メモリ効率: バッチごとに処理
     3. 進捗の可視化: どこまで処理が終わったかが明確
 
-    【処理の流れ】
-    1. 各画像についてキャッシュを確認
-    2. キャッシュがあればそれを使用
-    3. キャッシュがなければ計算してキャッシュに保存
-    4. 最後にすべての埋め込みを連結して返す
+    【キャッシュファイル】
+    - cache_dir/embeddings.pt に辞書形式で保存
+    - キー: 画像の絶対パス（文字列）
+    - 値: 512次元の埋め込みテンソル
 
-    【バッチ処理について】
-    - キャッシュミスした画像はバッチ単位でまとめて処理
-    - GPU の並列処理能力を活かして高速化
+    【処理の流れ】
+    1. キャッシュファイルを読み込む
+    2. 各画像についてキャッシュを確認
+    3. キャッシュがあればそれを使用
+    4. キャッシュがなければバッチ計算してキャッシュに追加
+    5. 一定間隔でキャッシュをファイルに保存
+    6. 最後にすべての埋め込みを連結して返す
 
     Args:
         image_paths (list): 画像ファイルのパスリスト
@@ -411,15 +480,17 @@ def compute_embeddings_streaming(
         device (str): 計算デバイス ("cuda" または "cpu")
         cache_dir (Path): キャッシュディレクトリのパス
         batch_size (int): バッチサイズ。デフォルトは32。
+        save_interval (int): キャッシュを保存する間隔（バッチ数）。デフォルトは5。
 
     Returns:
         torch.Tensor: すべての画像の埋め込みを連結したテンソル (N, 512)
 
     Note:
-        キャッシュを削除したい場合は cache_dir を削除してください。
+        キャッシュを削除したい場合は cache_dir/embeddings.pt を削除してください。
     """
-    # キャッシュディレクトリを作成
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    # キャッシュを初期化
+    cache_path = cache_dir / "embeddings.pt"
+    cache = EmbeddingCache(cache_path)
 
     embeddings = []
     cache_hits = 0
@@ -433,24 +504,17 @@ def compute_embeddings_streaming(
     batch_paths = []
     batch_indices = []  # 元のインデックスを記録（順序を保持するため）
 
-    print(f"Processing {len(image_paths)} images (cache: {cache_dir})")
+    print(f"Processing {len(image_paths)} images (cache: {cache_path})")
 
-    # まず、キャッシュの状態を確認してプレースホルダーを作成
+    # まず、キャッシュの状態を確認
     for idx, img_path in enumerate(tqdm(image_paths, desc="Checking cache")):
-        cache_path = get_cache_path(img_path, cache_dir)
+        cache_key = get_cache_key(img_path)
 
-        if cache_path.exists():
-            # キャッシュヒット: 保存済みの埋め込みを読み込む
-            try:
-                embedding = torch.load(cache_path, weights_only=True)
-                embeddings.append((idx, embedding))
-                cache_hits += 1
-            except Exception as e:
-                # キャッシュファイルが壊れている場合は再計算
-                print(f"Cache corrupted for {img_path}, will recompute: {e}")
-                batch_paths.append(img_path)
-                batch_indices.append(idx)
-                cache_misses += 1
+        if cache_key in cache:
+            # キャッシュヒット: 保存済みの埋め込みを使用
+            embedding = cache.get(cache_key)
+            embeddings.append((idx, embedding))
+            cache_hits += 1
         else:
             # キャッシュミス: 後でバッチ処理する
             batch_paths.append(img_path)
@@ -462,6 +526,7 @@ def compute_embeddings_streaming(
     # ----- キャッシュミスした画像をバッチ処理 -----
     if batch_paths:
         print(f"Computing embeddings for {len(batch_paths)} uncached images...")
+        batches_since_save = 0
 
         with torch.no_grad():
             for i in tqdm(
@@ -496,27 +561,26 @@ def compute_embeddings_streaming(
                 features = features / features.norm(dim=-1, keepdim=True)
                 features = features.cpu()
 
-                # 各画像の埋め込みをキャッシュに保存
+                # 各画像の埋め込みをキャッシュに追加
                 for j, (img_path, idx) in enumerate(zip(valid_paths, valid_indices)):
                     embedding = features[j]
-                    cache_path = get_cache_path(img_path, cache_dir)
-
-                    # キャッシュに保存（アトミックに近い操作にするため一時ファイルを使用）
-                    temp_path = cache_path.with_suffix(".tmp")
-                    try:
-                        torch.save(embedding, temp_path)
-                        temp_path.rename(cache_path)  # アトミックなリネーム
-                    except Exception as e:
-                        print(f"Error saving cache for {img_path}: {e}")
-                        if temp_path.exists():
-                            temp_path.unlink()
-
+                    cache_key = get_cache_key(img_path)
+                    cache.set(cache_key, embedding)
                     embeddings.append((idx, embedding))
 
                 # GPU メモリを解放
                 del batch_tensor, features
                 if device == "cuda":
                     torch.cuda.empty_cache()
+
+                # 一定間隔でキャッシュを保存
+                batches_since_save += 1
+                if batches_since_save >= save_interval:
+                    cache.save()
+                    batches_since_save = 0
+
+        # 最後に残りを保存
+        cache.save()
 
     # ----- 埋め込みが空の場合のエラーハンドリング -----
     if not embeddings:
@@ -778,7 +842,8 @@ def save_checkpoint(
     # アトミックに保存（一時ファイル→リネーム）
     temp_path = checkpoint_path.with_suffix(".tmp")
     torch.save(checkpoint, temp_path)
-    temp_path.rename(checkpoint_path)
+    # Windows では rename() が既存ファイルを上書きできないため replace() を使用
+    temp_path.replace(checkpoint_path)
 
     print(f"  → Checkpoint saved at epoch {epoch + 1}")
 
@@ -848,7 +913,7 @@ def clear_checkpoint(checkpoint_path: Path) -> None:
 # ===== キャッシュ管理 =====
 def clear_cache(cache_dir: Path) -> None:
     """
-    埋め込みキャッシュディレクトリを削除する
+    埋め込みキャッシュファイルを削除する
 
     学習が正常に完了した後に呼び出す。
     次回の学習で古いキャッシュが使われないようにする。
@@ -861,9 +926,14 @@ def clear_cache(cache_dir: Path) -> None:
     Args:
         cache_dir (Path): キャッシュディレクトリのパス
     """
-    if cache_dir.exists():
-        shutil.rmtree(cache_dir)
-        print(f"Cache cleared: {cache_dir}")
+    cache_file = cache_dir / "embeddings.pt"
+    if cache_file.exists():
+        cache_file.unlink()
+        print(f"Cache cleared: {cache_file}")
+    # 一時ファイルも削除
+    temp_file = cache_dir / "embeddings.tmp"
+    if temp_file.exists():
+        temp_file.unlink()
 
 
 # ===== 学習 =====
