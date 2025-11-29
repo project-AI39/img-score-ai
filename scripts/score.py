@@ -37,7 +37,6 @@ from pathlib import Path
 from PIL import Image
 import open_clip
 from tqdm import tqdm
-from datetime import datetime
 
 
 # ===== 設定 =====

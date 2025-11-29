@@ -112,7 +112,6 @@ def check_libraries() -> bool:
 
     # PIL (Pillow)
     try:
-        from PIL import Image
         import PIL
 
         version = PIL.__version__
@@ -172,19 +171,30 @@ def check_directory_structure() -> bool:
 
     all_ok = True
 
+    # 必須ディレクトリ（存在しない場合はエラー）
     required_dirs = [
-        ("data/train/like", "好きな画像を配置"),
-        ("data/train/dislike", "嫌いな画像を配置"),
+        ("data/train/like", "学習用: 好きな画像を配置"),
+        ("data/train/dislike", "学習用: 嫌いな画像を配置"),
+        ("data/unlabeled", "推論用: 分類/スコアリングしたい画像を配置"),
         ("models/clip", "CLIPモデルを配置"),
         ("models/trained", "学習済みモデルの出力先"),
     ]
 
+    # オプションディレクトリ（推論実行時に自動生成される）
+    optional_dirs = [
+        ("data/classified/like", "classify.py出力: 好きと判定された画像"),
+        ("data/classified/dislike", "classify.py出力: 嫌いと判定された画像"),
+        ("data/scores", "score.py出力: スコアレポート(CSV)"),
+    ]
+
+    print("  [必須ディレクトリ]")
     for dir_path, description in required_dirs:
         path = Path(dir_path)
         if path.exists():
-            # ディレクトリ内のファイル数をカウント
+            # ディレクトリ内のファイル数をカウント（README.txtを除く）
             if path.is_dir():
-                file_count = len(list(path.glob("*")))
+                files = [f for f in path.glob("*") if f.name != "README.txt"]
+                file_count = len(files)
                 print_status(dir_path, True, f"{description} ({file_count} ファイル)")
             else:
                 print_status(dir_path, True, description)
@@ -192,6 +202,19 @@ def check_directory_structure() -> bool:
             print_status(dir_path, False, f"{description} - ディレクトリがありません")
             print(f"      mkdir -p {dir_path}")
             all_ok = False
+
+    print("\n  [オプションディレクトリ（推論時に自動生成）]")
+    for dir_path, description in optional_dirs:
+        path = Path(dir_path)
+        if path.exists():
+            if path.is_dir():
+                files = [f for f in path.glob("*") if f.name != "README.txt"]
+                file_count = len(files)
+                print_status(dir_path, True, f"{description} ({file_count} ファイル)")
+            else:
+                print_status(dir_path, True, description)
+        else:
+            print_status(dir_path, True, f"{description} - 未作成（自動生成されます）")
 
     return all_ok
 
@@ -253,6 +276,42 @@ def check_training_data() -> bool:
     return like_count > 0 and dislike_count > 0
 
 
+def check_unlabeled_data() -> bool:
+    """推論用データの確認"""
+    print_header("推論用データ確認")
+
+    image_extensions = [
+        "*.jpg",
+        "*.jpeg",
+        "*.png",
+        "*.webp",
+        "*.JPG",
+        "*.JPEG",
+        "*.PNG",
+        "*.WEBP",
+    ]
+
+    unlabeled_dir = Path("data/unlabeled")
+
+    # unlabeledディレクトリの画像数
+    unlabeled_count = 0
+    if unlabeled_dir.exists():
+        for ext in image_extensions:
+            unlabeled_count += len(list(unlabeled_dir.glob(ext)))
+
+    if unlabeled_count > 0:
+        print_status("推論用画像", True, f"{unlabeled_count} 枚")
+        print("      推論を実行できます:")
+        print("        uv run python scripts/classify.py  (フォルダ分類)")
+        print("        uv run python scripts/score.py     (スコアCSV出力)")
+    else:
+        print_status("推論用画像", True, "画像がありません（オプション）")
+        print("      推論を行う場合は data/unlabeled/ に画像を配置してください")
+
+    # 常にTrueを返す（オプションのため）
+    return True
+
+
 def main():
     """メイン処理"""
     print("\n" + "=" * 60)
@@ -268,6 +327,7 @@ def main():
     results.append(("モデルファイル", check_model_files()))
     results.append(("ディレクトリ構造", check_directory_structure()))
     results.append(("学習データ", check_training_data()))
+    results.append(("推論用データ", check_unlabeled_data()))
 
     # 結果サマリー
     print_header("確認結果サマリー")
@@ -282,8 +342,12 @@ def main():
 
     if all_passed:
         print("\n  🎉 環境構築が完了しています！")
-        print("\n  学習を開始するには:")
-        print("    uv run python scripts/train.py")
+        print("\n  次のステップ:")
+        print("    1. 学習を開始する場合:")
+        print("       uv run python scripts/train.py")
+        print("    2. 推論を実行する場合（学習済みモデルが必要）:")
+        print("       uv run python scripts/classify.py  (フォルダ分類)")
+        print("       uv run python scripts/score.py     (スコアCSV出力)")
     else:
         print("\n  ⚠ 一部の項目が未完了です")
         print("    上記のエラーを確認し、必要な設定を行ってください")
