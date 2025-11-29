@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[oc]
+.venv/
+
+# Model files (large)
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+
+# Test images
+test.png
