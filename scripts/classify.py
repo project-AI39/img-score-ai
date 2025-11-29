@@ -67,20 +67,32 @@ class PreferenceHead(nn.Module):
 
 
 def get_image_paths(directory: Path) -> list[Path]:
-    """ディレクトリから画像ファイルのパスを取得"""
-    image_extensions = [
-        "*.jpg",
-        "*.jpeg",
-        "*.png",
-        "*.webp",
-        "*.JPG",
-        "*.JPEG",
-        "*.PNG",
-        "*.WEBP",
+    """
+    ディレクトリから画像ファイルのパスを取得
+
+    大文字・小文字を区別せずに検出する（.JPG, .Jpg なども対応）
+
+    Args:
+        directory (Path): 検索するディレクトリ
+
+    Returns:
+        list[Path]: 画像ファイルのパスリスト（ソート済み）
+    """
+    image_extensions = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+        ".gif",
+        ".bmp",
+        ".tiff",
+        ".tif",
+    }
+    paths = [
+        p
+        for p in directory.iterdir()
+        if p.is_file() and p.suffix.lower() in image_extensions
     ]
-    paths = []
-    for ext in image_extensions:
-        paths.extend(directory.glob(ext))
     return sorted(paths)
 
 
@@ -189,8 +201,19 @@ def classify_images(
 
     like_count = 0
     dislike_count = 0
+    processed_paths: set[Path] = set()  # 処理済みパスを記録
 
     for img_path, prob in tqdm(results, desc="Classifying"):
+        # 既に処理済みのパスはスキップ（重複対策）
+        if img_path in processed_paths:
+            continue
+        processed_paths.add(img_path)
+
+        # 移動モードの場合、ファイルが存在するか確認
+        if not copy_mode and not img_path.exists():
+            print(f"Warning: File not found, skipping: {img_path}")
+            continue
+
         if prob >= threshold:
             dest_dir = like_dir
             like_count += 1

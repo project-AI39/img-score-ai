@@ -74,20 +74,32 @@ class PreferenceHead(nn.Module):
 
 
 def get_image_paths(directory: Path) -> list[Path]:
-    """ディレクトリから画像ファイルのパスを取得"""
-    image_extensions = [
-        "*.jpg",
-        "*.jpeg",
-        "*.png",
-        "*.webp",
-        "*.JPG",
-        "*.JPEG",
-        "*.PNG",
-        "*.WEBP",
+    """
+    ディレクトリから画像ファイルのパスを取得
+
+    大文字・小文字を区別せずに検出する（.JPG, .Jpg なども対応）
+
+    Args:
+        directory (Path): 検索するディレクトリ
+
+    Returns:
+        list[Path]: 画像ファイルのパスリスト（ソート済み）
+    """
+    image_extensions = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+        ".gif",
+        ".bmp",
+        ".tiff",
+        ".tif",
+    }
+    paths = [
+        p
+        for p in directory.iterdir()
+        if p.is_file() and p.suffix.lower() in image_extensions
     ]
-    paths = []
-    for ext in image_extensions:
-        paths.extend(directory.glob(ext))
     return sorted(paths)
 
 

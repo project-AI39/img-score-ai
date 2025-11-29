@@ -319,6 +319,47 @@ class ImageEmbeddingDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         return self.embeddings[idx], self.labels[idx]
 
 
+# ===== 画像パス収集 =====
+def get_image_paths(directory: Path) -> list[Path]:
+    """
+    ディレクトリから画像ファイルのパスを取得する
+
+    【対応フォーマット】
+    - JPEG: .jpg, .jpeg
+    - PNG: .png
+    - WebP: .webp
+    - GIF: .gif
+    - BMP: .bmp
+    - TIFF: .tiff, .tif
+
+    大文字・小文字を区別せずに検出する（.JPG, .Jpg なども対応）
+
+    Args:
+        directory (Path): 検索するディレクトリ
+
+    Returns:
+        list[Path]: 画像ファイルのパスリスト（ソート済み）
+    """
+    # 対応する画像拡張子（小文字で定義）
+    image_extensions = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+        ".gif",
+        ".bmp",
+        ".tiff",
+        ".tif",
+    }
+
+    paths = [
+        p
+        for p in directory.iterdir()
+        if p.is_file() and p.suffix.lower() in image_extensions
+    ]
+    return sorted(paths)
+
+
 # ===== 埋め込み計算 =====
 def get_cache_key(image_path: Path) -> str:
     """
@@ -664,28 +705,8 @@ def prepare_data() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tens
     clip_model = clip_model.to(device)
 
     # ----- 画像パス収集 -----
-    # 複数の拡張子に対応（jpg, jpeg, png, webp）
-    # 大文字・小文字両方に対応するため、複数のパターンを使用
-    image_extensions = [
-        "*.jpg",
-        "*.jpeg",
-        "*.png",
-        "*.webp",
-        "*.JPG",
-        "*.JPEG",
-        "*.PNG",
-        "*.WEBP",
-    ]
-
-    like_paths = []
-    for ext in image_extensions:
-        like_paths.extend(CONFIG["like_dir"].glob(ext))
-    like_paths = sorted(like_paths)  # 順序を安定させる
-
-    dislike_paths = []
-    for ext in image_extensions:
-        dislike_paths.extend(CONFIG["dislike_dir"].glob(ext))
-    dislike_paths = sorted(dislike_paths)  # 順序を安定させる
+    like_paths = get_image_paths(CONFIG["like_dir"])
+    dislike_paths = get_image_paths(CONFIG["dislike_dir"])
 
     print(f"Found {len(like_paths)} like images, {len(dislike_paths)} dislike images")
 
