@@ -115,8 +115,8 @@ CONFIG = {
     # ViT-B-16: Vision Transformer の Base サイズ、16x16 パッチ
     # 画像を 16x16 ピクセルのパッチに分割して処理する
     "clip_model": "ViT-B-16",
-    # 事前学習済みの CLIP モデルの重みファイル（プロジェクトルートに配置）
-    "clip_checkpoint": "open_clip_model.safetensors",
+    # 事前学習済みの CLIP モデルの重みファイル
+    "clip_checkpoint": Path("models/clip/open_clip_model.safetensors"),
     # ----- データパス -----
     # 学習データのディレクトリ構成:
     # data/train/
@@ -143,7 +143,8 @@ CONFIG = {
     # 学習中にモデルの汎化性能を評価するために使用
     "val_split": 0.2,
     # ----- モデル保存 -----
-    "save_dir": Path("models"),
+    # 学習済みモデルの保存先ディレクトリ
+    "save_dir": Path("models/trained"),
     "model_name": "preference_head_v1.pt",
     # ----- 埋め込みキャッシュ -----
     # 計算済みの埋め込みを保存するディレクトリ
@@ -152,7 +153,7 @@ CONFIG = {
     # ----- 学習チェックポイント -----
     # 学習の途中状態を保存するファイル
     # 処理が途中で止まっても、次回実行時に途中から再開できる
-    "checkpoint_path": Path("models/checkpoint.pt"),
+    "checkpoint_path": Path("models/trained/checkpoint.pt"),
     # チェックポイントを保存する間隔（エポック数）
     "checkpoint_interval": 1,
     # ----- Early Stopping -----
